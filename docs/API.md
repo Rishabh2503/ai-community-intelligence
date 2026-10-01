@@ -1,0 +1,431 @@
+# API Reference
+
+Base URL: `http://localhost:4000/api`
+
+All request and response bodies are JSON. Authenticated endpoints expect:
+
+```
+Authorization: Bearer <token>
+```
+
+Errors use a consistent envelope:
+
+```json
+{ "error": { "code": "NOT_FOUND", "message": "Event not found" } }
+```
+
+| Code | Status |
+|---|---|
+| `VALIDATION_ERROR` | 400 |
+| `BAD_REQUEST` | 400 |
+| `UNAUTHORIZED` | 401 |
+| `FORBIDDEN` | 403 |
+| `NOT_FOUND` | 404 |
+| `CONFLICT` | 409 |
+| `INTERNAL_ERROR` | 500 |
+
+Legend: 🔓 public · 🔑 requires sign-in · 🛡️ requires ORGANIZER or ADMIN · 👑 requires ADMIN
+
+### Role matrix
+
+| Capability | Signed out | MEMBER | ORGANIZER | ADMIN |
+|---|---|---|---|---|
+| Browse, search, ask the assistant | ✅ | ✅ | ✅ | ✅ |
+| RSVP, join communities, report content | — | ✅ | ✅ | ✅ |
+| Publish events / resources / announcements | — | — | ✅ | ✅ |
+| Pre-publish quality check (`/moderation/triage`) | — | — | ✅ | ✅ |
+| Organizer analytics | — | — | ✅ | ✅ |
+| Moderation queue (list, resolve, stats) | — | — | — | ✅ |
+
+Roles are enforced by `auth.requireRole(...)` in the HTTP layer. The web client
+mirrors the same matrix in `apps/web/src/lib/access.ts` so restricted pages are
+hidden from the navigation, but the API is the security boundary — a member
+calling a restricted endpoint directly receives `403 FORBIDDEN`.
+
+---
+
+## Health
+
+### 🔓 `GET /health`
+
+```json
+{ "status": "ok", "aiProvider": "cached(local)", "timestamp": "2026-09-20T08:01:32.795Z" }
+```
+
+Useful in a demo to show which AI provider is active.
+
+---
+
+## Authentication
+
+### 🔓 `POST /auth/register`
+
+```json
+{
+  "email": "you@example.com",
+  "password": "password123",
+  "name": "Your Name",
+  "role": "MEMBER",
+  "profile": { "skills": ["React"], "interests": ["Hackathons"] }
+}
+```
+
+Returns `201` with `{ token, user }`. A profile is created and indexed immediately, so the new member is discoverable by search and matching straight away.
+
+### 🔓 `POST /auth/login`
+
+```json
+{ "email": "aarav@communityspace.dev", "password": "password123" }
+```
+```json
+{
+  "token": "eyJhbGciOi…",
+  "user": { "id": "clx…", "name": "Aarav Sharma", "role": "ORGANIZER", "email": "…", "avatarUrl": "…" }
+}
+```
+
+### 🔑 `GET /auth/me`
+
+Returns the signed-in user with their full profile.
+
+---
+
+## Profiles
+
+### 🔓 `GET /profiles`
+
+Query parameters: `q`, `skills` (comma separated), `availability` (`OPEN` · `BUSY` · `HIRING` · `LOOKING_FOR_TEAM`), `page`, `pageSize`
+
+```json
+{ "items": [ { "userId": "…", "name": "Meera Nair", "headline": "ML engineer…", "skills": ["Python","PyTorch"], "…": "…" } ], "total": 6, "page": 1, "pageSize": 20 }
+```
+
+### 🔓 `GET /profiles/:userId`
+### 🔑 `PUT /profiles/me`
+
+```json
+{
+  "headline": "Full-stack engineer",
+  "bio": "…",
+  "location": "Bengaluru, India",
+  "availability": "LOOKING_FOR_TEAM",
+  "skills": ["React", "Node.js"],
+  "interests": ["Open Source"],
+  "expertise": ["Web Architecture"],
+  "experienceYrs": 5
+}
+```
+
+Saving re-indexes the profile, so updated skills affect matching instantly.
+
+---
+
+## Communities
+
+| Method | Path | Access |
+|---|---|---|
+| `GET` | `/communities` | 🔓 supports `q`, `page`, `pageSize` |
+| `GET` | `/communities/:id` | 🔓 |
+| `GET` | `/communities/mine` | 🔑 communities you belong to |
+| `POST` | `/communities` | 🔑 |
+| `PATCH` | `/communities/:id` | 🔑 |
+| `DELETE` | `/communities/:id` | 🔑 |
+| `POST` | `/communities/:id/join` | 🔑 |
+| `DELETE` | `/communities/:id/leave` | 🔑 |
+
+**Create body**
+
+```json
+{
+  "name": "Rust Systems Guild",
+  "description": "Systems programming, embedded targets and performance work.",
+  "category": "Software Engineering",
+  "tags": ["Rust", "Systems"],
+  "location": "Online",
+  "isPublic": true
+}
+```
+
+A unique slug is generated automatically. Joining records a `JOIN` interaction that feeds recommendations.
+
+---
+
+## Events
+
+| Method | Path | Access |
+|---|---|---|
+| `GET` | `/events` | 🔓 `q`, `communityId`, `mode`, `upcoming=true`, `page`, `pageSize` |
+| `GET` | `/events/upcoming?limit=12` | 🔓 |
+| `GET` | `/events/:id` | 🔓 |
+| `POST` | `/events` | 🔑 organizer id taken from the token |
+| `PATCH` | `/events/:id` | 🔑 |
+| `DELETE` | `/events/:id` | 🔑 |
+| `POST` | `/events/:id/rsvp` | 🔑 |
+
+**Create body**
+
+```json
+{
+  "communityId": "clx…",
+  "title": "GraphQL API Engineering Workshop",
+  "description": "Long description — this is what gets summarised…",
+  "mode": "HYBRID",
+  "venue": "Koramangala, Bengaluru",
+  "startsAt": "2026-10-10T10:00:00.000Z",
+  "endsAt": "2026-10-10T14:00:00.000Z",
+  "capacity": 45,
+  "tags": ["GraphQL", "Node.js"]
+}
+```
+
+The response includes a generated `summary`, and the event is searchable immediately.
+
+**RSVP body:** `{ "status": "GOING" }` — also accepts `INTERESTED`, `CANCELLED`. Returns `{ "rsvpCount": 12 }`.
+
+---
+
+## Resources · Announcements · Posts · Projects
+
+All four expose the same five CRUD endpoints (generated by one router factory):
+
+```
+GET    /resources        GET /resources/:id
+POST   /resources        PATCH /resources/:id        DELETE /resources/:id
+```
+
+Replace `/resources` with `/announcements`, `/posts` or `/projects`.
+
+| Entity | Required fields | Notes |
+|---|---|---|
+| Resource | `communityId`, `title`, `description` | plus `url`, `type` (`ARTICLE`·`VIDEO`·`REPO`·`COURSE`·`TOOL`·`DOC`), `tags` |
+| Announcement | `communityId`, `title`, `body` | plus `priority` (`NORMAL`·`HIGH`·`URGENT`) |
+| Post | `communityId`, `title`, `body` | plus `tags` |
+| Project | `title`, `description` | plus `neededSkills`, `teamSize`, `status` |
+
+Author/owner is taken from the JWT — it cannot be spoofed in the body.
+
+---
+
+## AI
+
+### 🔓 `GET /ai/search`
+
+| Parameter | Description |
+|---|---|
+| `q` | natural-language query (required) |
+| `types` | comma-separated: `EVENT,RESOURCE,ANNOUNCEMENT,POST,COMMUNITY,PROFILE,PROJECT` |
+| `limit` | 1–50, default 12 |
+
+```json
+{
+  "query": "who can help me with kubernetes costs",
+  "tookMs": 41,
+  "model": "local-hashing-vectorizer-v1",
+  "hits": [
+    {
+      "entityType": "EVENT",
+      "entityId": "clx…",
+      "title": "Kubernetes Cost Optimisation Clinic",
+      "snippet": "Most teams overspend on Kubernetes by 40 percent…",
+      "score": 0.63,
+      "matchPercentage": 81,
+      "reasons": ["Strong semantic match", "Mentions kubernetes, cost"],
+      "metadata": { "kind": "event", "communityName": "Cloud Native India", "tags": ["Kubernetes"] },
+      "entity": { "…full domain object…": true }
+    }
+  ]
+}
+```
+
+### 🔓 `POST /ai/assistant`
+
+```json
+{ "question": "When is the winter hackathon and what are the team size rules?" }
+```
+```json
+{
+  "question": "…",
+  "answer": "…",
+  "grounded": true,
+  "provider": "local",
+  "latencyMs": 38,
+  "sources": [
+    { "entityType": "ANNOUNCEMENT", "entityId": "clx…", "title": "Winter Campus Hackathon 2026…", "snippet": "…", "matchPercentage": 75 }
+  ],
+  "followUps": ["What should I prepare for \"…\"?", "Which events are happening this month?"]
+}
+```
+
+`grounded: false` means nothing relevant was retrieved and the answer should be treated with caution. Every question is logged for organizer analytics.
+
+### 🔓 `POST /ai/recommendations`
+
+```json
+{ "intent": "I want to learn about vector search", "types": ["EVENT","RESOURCE"], "limit": 8 }
+```
+```json
+{
+  "basis": "your request \"I want to learn about vector search\" + your skills (React, Node.js) + what you recently viewed and joined",
+  "intent": "…",
+  "items": [ { "entityType": "EVENT", "matchPercentage": 65, "…": "…" } ]
+}
+```
+
+Works signed out (intent only). Signed in, it blends intent + profile + activity, and filters out things you already joined or RSVP'd to.
+
+### 🔓 `POST /ai/match`
+
+Either match against a stored project:
+
+```json
+{ "projectId": "clx…", "limit": 6 }
+```
+
+or describe what you need:
+
+```json
+{
+  "description": "Building a mobile study group app for a hackathon",
+  "requiredSkills": ["React Native", "UI Design"],
+  "limit": 6
+}
+```
+
+```json
+{
+  "project": null,
+  "candidates": [
+    {
+      "profile": { "name": "Rohan Gupta", "headline": "…", "skills": ["React Native","Firebase"] },
+      "matchPercentage": 50,
+      "matchedSkills": ["React Native"],
+      "missingSkills": ["UI Design"],
+      "reasons": ["Covers React Native", "Actively looking for a team"]
+    }
+  ]
+}
+```
+
+### 🔑 `GET /ai/match/me`
+
+Suggests collaborators based on your own profile and interests.
+
+### 🔓 `POST /ai/summarize`
+
+```json
+{ "text": "A very long announcement…", "style": "bullets" }
+```
+```json
+{ "summary": "• …\n• …", "highlights": ["hackathon","registration","teams"], "provider": "local" }
+```
+
+Text shorter than 280 characters is returned unchanged.
+
+### 🛡️ `POST /ai/reindex`
+
+Rebuilds the entire vector index. Run this after changing the AI provider.
+
+```json
+{ "indexed": 32, "byType": { "EVENT": 6, "RESOURCE": 6, "ANNOUNCEMENT": 3, "POST": 3, "COMMUNITY": 5, "PROFILE": 6, "PROJECT": 3 } }
+```
+
+---
+
+## Moderation
+
+### 🛡️ `POST /moderation/triage`
+
+Check content **before** publishing. Available to anyone who can publish.
+
+```json
+{ "entityType": "EVENT", "title": "…", "body": "…" }
+```
+```json
+{
+  "verdict": "LIKELY_DUPLICATE",
+  "score": 0.58,
+  "rationale": "Very similar to existing content \"GraphQL API Engineering Workshop\" (58% overlap)",
+  "duplicates": [ { "entityType": "EVENT", "entityId": "clx…", "title": "…", "similarity": 0.58 } ]
+}
+```
+
+Verdicts: `LIKELY_DUPLICATE` · `LIKELY_SPAM` · `POSSIBLY_INAPPROPRIATE` · `NEEDS_HUMAN_REVIEW` · `LIKELY_FINE`
+
+### 🔑 `POST /moderation/reports`
+
+Any signed-in member can report content — this is the community safety valve.
+
+```json
+{
+  "targetType": "RESOURCE",
+  "targetId": "clx…",
+  "targetTitle": "Chunking Strategies for Retrieval",
+  "reason": "DUPLICATE",
+  "details": "Looks like a repost of last month's guide."
+}
+```
+
+Reasons: `SPAM` · `MISLEADING` · `DUPLICATE` · `INAPPROPRIATE` · `OTHER`. Triage runs automatically and is stored with the report.
+
+### 👑 `GET /moderation/reports?status=PENDING`
+
+Returns reports **sorted by AI priority score**, so moderators see the most likely problems first. Admin only.
+
+### 👑 `PATCH /moderation/reports/:id`
+
+```json
+{ "status": "RESOLVED", "resolution": "Removed the duplicate entry." }
+```
+
+Statuses: `PENDING` · `REVIEWING` · `RESOLVED` · `DISMISSED`
+
+### 👑 `GET /moderation/stats`
+
+```json
+{ "PENDING": 1, "RESOLVED": 4 }
+```
+
+---
+
+## Analytics
+
+### 🛡️ `GET /analytics/organizer`
+
+```json
+{
+  "totals": { "communities": 5, "events": 6, "resources": 6, "announcements": 3, "members": 6, "indexedChunks": 42 },
+  "engagement": {
+    "byAction": { "RSVP": 12, "VIEW": 6, "SEARCH": 9, "JOIN": 3 },
+    "daily": [ { "date": "2026-09-07", "count": 0 } ],
+    "topEvents": [ { "id": "clx…", "title": "…", "rsvps": 3, "interactions": 2 } ]
+  },
+  "knowledgeDemand": {
+    "topTopics": [ { "topic": "hackathon registration", "count": 4 } ],
+    "recentQuestions": [ { "question": "…", "topicLabel": "…", "createdAt": "…" } ],
+    "unansweredSignals": ["cka study group"]
+  },
+  "moderation": { "byStatus": { "PENDING": 1 }, "openCount": 1 },
+  "skillSupply": [ { "skill": "React", "count": 3 } ]
+}
+```
+
+`unansweredSignals` are topics members ask about frequently but which have little published content — the most actionable number on the dashboard.
+
+---
+
+## Try it from the terminal
+
+```powershell
+# search
+curl "http://localhost:4000/api/ai/search?q=find%20me%20a%20hackathon%20team&limit=5"
+
+# ask the assistant
+curl -X POST http://localhost:4000/api/ai/assistant `
+  -H "Content-Type: application/json" `
+  -d '{\"question\":\"What resources explain RAG chunking?\"}'
+
+# sign in, then publish
+curl -X POST http://localhost:4000/api/auth/login `
+  -H "Content-Type: application/json" `
+  -d '{\"email\":\"aarav@communityspace.dev\",\"password\":\"password123\"}'
+```

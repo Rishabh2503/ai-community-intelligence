@@ -1,0 +1,31 @@
+{
+  "name": "community-space",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AI-Powered Community Intelligence Platform",
+  "workspaces": [
+    "apps/api",
+    "apps/web"
+  ],
+  "scripts": {
+    "setup": "npm install && npm run db:setup --workspace @community-space/api",
+    "db:setup": "npm run db:setup --workspace @community-space/api",
+    "db:reset": "npm run db:reset --workspace @community-space/api",
+    "dev": "concurrently -n api,web -c cyan,magenta \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "npm run dev --workspace @community-space/api",
+    "dev:web": "npm run dev --workspace @community-space/web",
+    "build": "npm run build --workspace @community-space/api && npm run build --workspace @community-space/web",
+    "typecheck": "npm run typecheck --workspace @community-space/api && npm run typecheck --workspace @community-space/web"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "prisma": "^6.19.3"
+  },
+  "overrides": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
